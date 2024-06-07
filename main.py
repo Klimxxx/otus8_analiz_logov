@@ -1,61 +1,74 @@
-import re  # Импортируем модуль регулярных выражений для анализа строк
-from collections import Counter  # Импортируем Counter для подсчета элементов
-from datetime import datetime  # Импортируем datetime для работы с датой и временем
-import os  # Импортируем модуль os для работы с файловой системой
+import os
+import re
+import json
+from collections import defaultdict
 
-# Функция для анализа лог-файла
 
-def parse_log(log_file):
-    requests_count = 0  # Инициализируем счетчик общего количества запросов
-    http_methods = Counter()  # Создаем Counter для подсчета количества запросов по каждому HTTP-методу
-    ip_addresses = Counter()  # Создаем Counter для подсчета количества запросов от каждого IP-адреса
-    request_times = []  # Создаем пустой список для хранения информации о времени запроса
+import re
 
-    # Определяем абсолютный путь к лог-файлу
-    log_file_path = os.path.join(os.getcwd(), 'resources', log_file)
 
-    # Открываем лог-файл для чтения
-    with open(log_file_path, 'r') as f:
-        # Читаем файл построчно
-        for line in f:
-            # Используем регулярное выражение для извлечения информации из строки лога
-            parts = re.match(r'(\S+) - - \[(.*?)\] "(\S+).*?"', line)
-            if parts:  # Если строка соответствует формату записи лога
-                ip_address = parts.group(1)  # Извлекаем IP-адрес
-                timestamp = datetime.strptime(parts.group(2), '%d/%b/%Y:%H:%M:%S %z')  # Извлекаем дату и время
-                http_method = parts.group(3).split()[0]  # Извлекаем HTTP-метод
+def parse_log_line(line):
+    pattern = r'(?P<ip>\S+) - - \[(?P<timestamp>.+)\] "(?P<method>\S+) (?P<url>\S+)\s?(?P<protocol>\S+)?\s?(?P<status_code>\S+)?\s?(?P<status_text>\S+)?" (?P<bytes_sent>\d+) (?P<response_time>\d+) "(?P<referer>.+)" "(?P<user_agent>.+)" (?P<duration>\d+)'
+    match = re.match(pattern, line)
+    if match:
+        return match.groupdict()
+    return None
 
-                requests_count += 1  # Увеличиваем счетчик общего количества запросов
-                http_methods[http_method] += 1  # Увеличиваем счетчик для текущего HTTP-метода
-                ip_addresses[ip_address] += 1  # Увеличиваем счетчик для текущего IP-адреса
-                # Добавляем информацию о запросе в список request_times
-                request_times.append((http_method, parts.group(3).split()[1], ip_address, timestamp))
 
-    return requests_count, http_methods, ip_addresses, request_times  # Возвращаем результаты анализа
+def process_log_files(log_path):
+    total_requests = 0
+    method_counts = defaultdict(int)
+    ip_counts = defaultdict(int)
+    longest_requests = []
 
-log_file = 'access1.log'  # Имя лог-файла
-requests_count, http_methods, ip_addresses, request_times = parse_log(log_file)  # Анализируем лог-файл
+    if os.path.isfile(log_path):
+        log_files = [log_path]
+    else:
+        log_files = [
+            os.path.join(log_path, f)
+            for f in os.listdir(log_path)
+            if f.endswith(".log")
+        ]
 
-# Выводим общее количество запросов
-print("Общее количество выполненных запросов:", requests_count)
-print("Количество запросов по HTTP-методам:")
-# Выводим количество запросов по каждому HTTP-методу
-for method, count in http_methods.items():
-    print(f"{method}: {count}")
-print("Топ 3 IP адресов:")
-# Выводим топ 3 IP-адресов
-for ip, count in ip_addresses.most_common(3):
-    print(f"{ip}: {count}")
+    for log_file in log_files:
+        with open(log_file, "r") as file:
+            for line in file:
+                log_data = parse_log_line(line)
+                if log_data:
+                    total_requests += 1
+                    method_counts[log_data["method"]] += 1
+                    ip_counts[log_data["ip"]] += 1
 
-# Функция для нахождения топ 3 самых долгих запросов
-def top_slowest_requests(request_times, n=3):
-    # Сортируем список request_times по длительности запроса в обратном порядке и берем первые n элементов
-    slowest_requests = sorted(request_times, key=lambda x: x[-1], reverse=True)[:n]
-    return slowest_requests
+                    longest_requests.append(
+                        {
+                            "ip": log_data["ip"],
+                            "date": log_data["timestamp"],
+                            "method": log_data["method"],
+                            "url": log_data["url"],
+                            "duration": log_data["duration"],
+                        }
+                    )
+                    longest_requests.sort(key=lambda x: x["duration"], reverse=True)
+                    longest_requests = longest_requests[:3]
 
-slowest_requests = top_slowest_requests(request_times)  # Находим топ 3 самых долгих запросов
-print("Топ 3 самых долгих запросов:")
-# Выводим топ 3 самых долгих запросов
-for req in slowest_requests:
-    method, url, ip, timestamp = req
-    print(f"HTTP метод: {method}, URL: {url}, IP: {ip}, Время запроса: {timestamp}")
+        top_ips = sorted(ip_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+        top_ips = {ip: count for ip, count in top_ips}
+
+        log_stats = {
+            "top_ips": top_ips,
+            "top_longest": longest_requests,
+            "total_stat": dict(method_counts),
+            "total_requests": total_requests,
+        }
+
+        log_file_name = os.path.basename(log_file)
+        json_file_name = os.path.splitext(log_file_name)[0] + ".json"
+        with open(json_file_name, "w") as json_file:
+            json.dump(log_stats, json_file, indent=2)
+
+        print(f"Статистика для файла: {log_file_name}")
+        print(json.dumps(log_stats, indent=2))
+        print()
+
+
+process_log_files("resource/access.log")
